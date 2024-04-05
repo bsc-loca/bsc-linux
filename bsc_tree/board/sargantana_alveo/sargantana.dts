@@ -1,0 +1,54 @@
+/dts-v1/;
+
+/ {
+  #address-cells = <1>;
+  #size-cells = <1>;
+  compatible = "riscv,rv64i";
+  model = "Barcelona Supercomputing Center - Sargantana";
+  chosen {
+		bootargs = "earlycon=sbi console=ttyS0,115200n8";
+	};
+  cpus {
+    #address-cells = <1>;
+    #size-cells = <0>;
+    timebase-frequency = <50000>; // 32.768 kHz
+    CPU0: cpu@0 {
+      clock-frequency = <50000000>; // 50 MHz
+      device_type = "cpu";
+      reg = <0>;
+      status = "okay";
+      compatible = "riscv";
+      riscv,isa = "rv64imafd";
+      mmu-type = "riscv,sv39";
+      tlb-split;
+      // HLIC - hart local interrupt controller
+      CPU0_intc: interrupt-controller {
+        #interrupt-cells = <1>;
+        interrupt-controller;
+        compatible = "riscv,cpu-intc";
+      };
+    };
+  };
+
+  uart0: serial@10000000 {
+    compatible = "ns16750";
+    reg = <0x40001000 0x100>;
+    interrupts = <0>;
+    port-number = <0>;
+    reg-shift = <2>;
+    clock-frequency = <50000000>;
+    current-speed = <115200>;
+    status = "okay";
+  };
+
+  memory@80000000 {
+    device_type = "memory";
+    reg = <0x80000000 0x40000000>;
+  };
+  soc {
+    #address-cells = <1>;
+    #size-cells = <1>;
+    compatible = "simple-bus";
+    ranges;
+  };
+};
