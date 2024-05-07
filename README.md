@@ -31,7 +31,12 @@ First of all, pull `buildroot` submodule:
 git submodule update --init
 ```
 
-**From now on, any command is assumed to be run from the `buildroot` directory.**
+> [!IMPORTANT]
+> **From now on, any command is assumed to be run from the `buildroot` directory.**
+>
+> ```bash
+> cd buildroot
+> ```
 
 Then, run the following code to configure buildroot according to your required setup.
 
