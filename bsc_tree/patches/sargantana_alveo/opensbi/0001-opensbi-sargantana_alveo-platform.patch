@@ -283,7 +283,7 @@ index 0000000..d444abe
 +endif
 +FW_PAYLOAD_ALIGN=0x1000
 +# FW_PAYLOAD_PATH="path to next boot stage binary image file"
-+FW_PAYLOAD_FDT_ADDR=0x82200000
++# FW_PAYLOAD_FDT_ADDR=0x82200000
 diff --git a/platform/fpga/sargantana_alveo/platform.c b/platform/fpga/sargantana_alveo/platform.c
 new file mode 100644
 index 0000000..a359b34
