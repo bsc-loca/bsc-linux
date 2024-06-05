@@ -1,192 +1,12 @@
-diff --git a/include/sbi_utils/serial/alveo_uart.h b/include/sbi_utils/serial/alveo_uart.h
-new file mode 100644
-index 0000000..0b6408c
---- /dev/null
-+++ b/include/sbi_utils/serial/alveo_uart.h
-@@ -0,0 +1,13 @@
-+/*
-+ * SPDX-License-Identifier: BSD-2-Clause
-+ */
-+
-+#ifndef __SERIAL_ALVEO_UART_H__
-+#define __SERIAL_ALVEO_UART_H__
-+
-+#include <sbi/sbi_types.h>
-+
-+int alveo_uart_init(unsigned long base, u32 in_freq, u32 baudrate, u32 reg_shift,
-+		  u32 reg_width, u32 reg_offset);
-+
-+#endif
-diff --git a/lib/utils/serial/Kconfig b/lib/utils/serial/Kconfig
-index e3589ca..b754c7c 100644
---- a/lib/utils/serial/Kconfig
-+++ b/lib/utils/serial/Kconfig
-@@ -84,6 +84,10 @@ config SERIAL_UART8250
- 	bool "8250 UART support"
- 	default n
- 
-+config SERIAL_ALVEO_UART
-+	bool "ALveo UART support"
-+	default n
-+
- config SERIAL_XILINX_UARTLITE
- 	bool "Xilinx UART Lite support"
- 	default n
-diff --git a/lib/utils/serial/alveo_uart.c b/lib/utils/serial/alveo_uart.c
-new file mode 100644
-index 0000000..a351741
---- /dev/null
-+++ b/lib/utils/serial/alveo_uart.c
-@@ -0,0 +1,123 @@
-+/*
-+ * SPDX-License-Identifier: BSD-2-Clause
-+ */
-+
-+#include <sbi/riscv_io.h>
-+#include <sbi/sbi_console.h>
-+#include <sbi_utils/serial/alveo_uart.h>
-+
-+/* clang-format off */
-+
-+#define UART_RBR_OFFSET		0	/* In:  Recieve Buffer Register */
-+#define UART_THR_OFFSET		0	/* Out: Transmitter Holding Register */
-+#define UART_DLL_OFFSET		0	/* Out: Divisor Latch Low */
-+#define UART_IER_OFFSET		1	/* I/O: Interrupt Enable Register */
-+#define UART_DLM_OFFSET		1	/* Out: Divisor Latch High */
-+#define UART_FCR_OFFSET		2	/* Out: FIFO Control Register */
-+#define UART_IIR_OFFSET		2	/* I/O: Interrupt Identification Register */
-+#define UART_LCR_OFFSET		3	/* Out: Line Control Register */
-+#define UART_MCR_OFFSET		4	/* Out: Modem Control Register */
-+#define UART_LSR_OFFSET		5	/* In:  Line Status Register */
-+#define UART_MSR_OFFSET		6	/* In:  Modem Status Register */
-+#define UART_SCR_OFFSET		7	/* I/O: Scratch Register */
-+#define UART_MDR1_OFFSET	8	/* I/O:  Mode Register */
-+
-+#define UART_LSR_FIFOE		0x80	/* Fifo error */
-+#define UART_LSR_TEMT		0x40	/* Transmitter empty */
-+#define UART_LSR_THRE		0x20	/* Transmit-hold-register empty */
-+#define UART_LSR_BI		0x10	/* Break interrupt indicator */
-+#define UART_LSR_FE		0x08	/* Frame error indicator */
-+#define UART_LSR_PE		0x04	/* Parity error indicator */
-+#define UART_LSR_OE		0x02	/* Overrun error indicator */
-+#define UART_LSR_DR		0x01	/* Receiver data ready */
-+#define UART_LSR_BRK_ERROR_BITS	0x1E	/* BI, FE, PE, OE bits */
-+
-+/* clang-format on */
-+
-+static volatile char *alveo_uart_base;
-+static u32 alveo_uart_in_freq;
-+static u32 alveo_uart_baudrate;
-+static u32 alveo_uart_reg_width;
-+static u32 alveo_uart_reg_shift;
-+
-+static u32 get_reg(u32 num)
-+{
-+	u32 offset = num << alveo_uart_reg_shift;
-+
-+	if (alveo_uart_reg_width == 1)
-+		return readb(alveo_uart_base + offset);
-+	else if (alveo_uart_reg_width == 2)
-+		return readw(alveo_uart_base + offset);
-+	else
-+		return readl(alveo_uart_base + offset);
-+}
-+
-+static void set_reg(u32 num, u32 val)
-+{
-+	u32 offset = num << alveo_uart_reg_shift;
-+
-+	if (alveo_uart_reg_width == 1)
-+		writeb(val, alveo_uart_base + offset);
-+	else if (alveo_uart_reg_width == 2)
-+		writew(val, alveo_uart_base + offset);
-+	else
-+		writel(val, alveo_uart_base + offset);
-+}
-+
-+static void alveo_uart_putc(char ch)
-+{
-+	while (!(get_reg(UART_LSR_OFFSET) & UART_LSR_TEMT))
-+		;
-+
-+	set_reg(UART_THR_OFFSET, ch);
-+}
-+
-+static int alveo_uart_getc(void)
-+{
-+	if (get_reg(UART_LSR_OFFSET) & UART_LSR_DR)
-+		return get_reg(UART_RBR_OFFSET);
-+	return -1;
-+}
-+
-+static struct sbi_console_device alveo_uart_console = {
-+	.name = "alveo_uart",
-+	.console_putc = alveo_uart_putc,
-+	.console_getc = alveo_uart_getc
-+};
-+
-+int alveo_uart_init(unsigned long base, u32 in_freq, u32 baudrate, u32 reg_shift,
-+		  u32 reg_width, u32 reg_offset)
-+{
-+	u16 bdiv = 0;
-+
-+	alveo_uart_base      = (volatile char *)base + reg_offset;
-+	alveo_uart_reg_shift = reg_shift;
-+	alveo_uart_reg_width = reg_width;
-+	alveo_uart_in_freq   = in_freq;
-+	alveo_uart_baudrate  = baudrate;
-+
-+	if (alveo_uart_baudrate) {
-+		bdiv = alveo_uart_in_freq / (16 * alveo_uart_baudrate);
-+	}
-+
-+	/* Disable all interrupts */
-+	set_reg(UART_IER_OFFSET, 0x00);
-+	/* Enable DLAB */
-+	set_reg(UART_LCR_OFFSET, 0x80);
-+
-+	if (bdiv) {
-+		/* Set divisor low byte */
-+		set_reg(UART_DLL_OFFSET, bdiv & 0xff);
-+		/* Set divisor high byte */
-+		set_reg(UART_DLM_OFFSET, (bdiv >> 8) & 0xff);
-+	}
-+
-+	/* 8 bits, no parity, one stop bit */
-+	set_reg(UART_LCR_OFFSET, 0x03); // previous was 0x0B
-+    /* Disable all interrupts*/
-+    set_reg(UART_IER_OFFSET, 0x00);
-+
-+	sbi_console_set_device(&alveo_uart_console);
-+
-+	return 0;
-+}
-diff --git a/lib/utils/serial/objects.mk b/lib/utils/serial/objects.mk
-index 1e6bd2e..0268bdf 100644
---- a/lib/utils/serial/objects.mk
-+++ b/lib/utils/serial/objects.mk
-@@ -44,5 +44,6 @@ libsbiutils-objs-$(CONFIG_SERIAL_SHAKTI) += serial/shakti-uart.o
- libsbiutils-objs-$(CONFIG_SERIAL_SIFIVE) += serial/sifive-uart.o
- libsbiutils-objs-$(CONFIG_SERIAL_LITEX) += serial/litex-uart.o
- libsbiutils-objs-$(CONFIG_SERIAL_UART8250) += serial/uart8250.o
-+libsbiutils-objs-$(CONFIG_SERIAL_ALVEO_UART) += serial/alveo_uart.o
- libsbiutils-objs-$(CONFIG_SERIAL_XILINX_UARTLITE) += serial/xlnx-uartlite.o
- libsbiutils-objs-$(CONFIG_SERIAL_SEMIHOSTING) += serial/semihosting.o
 diff --git a/platform/fpga/sargantana_alveo/Kconfig b/platform/fpga/sargantana_alveo/Kconfig
 new file mode 100644
 index 0000000..bf3e7e6
 --- /dev/null
 +++ b/platform/fpga/sargantana_alveo/Kconfig
-@@ -0,0 +1,10 @@
-+# SPDX-License-Identifier: BSD-2-Clause
-+
+@@ -0,0 +1,4 @@
 +config PLATFORM_SARGANTANA_ALVEO_FPGA
 +	bool
-+	select FDT
-+	select IPI_MSWI
-+	select IRQCHIP_PLIC
-+	select SERIAL_ALVEO_UART
-+	select TIMER_MTIMER
++	select SERIAL_UART8250
 +	default y
 diff --git a/platform/fpga/sargantana_alveo/configs/defconfig b/platform/fpga/sargantana_alveo/configs/defconfig
 new file mode 100644
@@ -196,201 +16,96 @@ new file mode 100644
 index 0000000..d444abe
 --- /dev/null
 +++ b/platform/fpga/sargantana_alveo/objects.mk
-@@ -0,0 +1,87 @@
-+#
-+# SPDX-License-Identifier: BSD-2-Clause
-+#
-+# Copyright (c) 2019 Western Digital Corporation or its affiliates.
-+#
-+
-+# Compiler pre-processor flags
+@@ -0,0 +1,19 @@
 +platform-cppflags-y =
-+
-+# C Compiler and assembler flags.
 +platform-cflags-y =
 +platform-asflags-y =
-+
-+# Linker flags: additional libraries and object files that the platform
-+# code needs can be added here
 +platform-ldflags-y =
-+
-+#
-+# Command for platform specific "make run"
-+# Useful for development and debugging on plaftform simulator (such as QEMU)
-+#
-+# platform-runcmd = your_platform_run.sh
-+
-+#
-+# Platform RISC-V XLEN, ABI, ISA and Code Model configuration.
-+# These are optional parameters but platforms can optionaly provide it.
-+# Some of these are guessed based on GCC compiler capabilities
-+#
 +PLATFORM_RISCV_XLEN = 64
 +PLATFORM_RISCV_ABI = lp64d
 +PLATFORM_RISCV_ISA = rv64imafd
 +PLATFORM_RISCV_CODE_MODEL = medany
 +
-+# Space separated list of object file names to be compiled for the platform
 +platform-objs-y += platform.o
 +
-+#
-+# If the platform support requires a builtin device tree file, the name of
-+# the device tree compiled file should be specified here. The device tree
-+# source file be in the form <dt file name>.dts
-+#
-+# platform-objs-y += <dt file name>.o
-+
-+# Firmware load address configuration. This is mandatory.
 +FW_TEXT_START=0x80000000
 +
-+# Optional parameter for path to external FDT
-+# FW_FDT_PATH="path to platform flattened device tree file"
-+
-+#
-+# Dynamic firmware configuration.
-+# Optional parameters are commented out. Uncomment and define these parameters
-+# as needed.
-+#
 +FW_DYNAMIC=n
-+
-+#
-+# Jump firmware configuration.
-+# Optional parameters are commented out. Uncomment and define these parameters
-+# as needed.
-+#
 +FW_JUMP=n
-+# This needs to be 4MB aligned for 32-bit support
-+# This needs to be 2MB aligned for 64-bit support
-+# ifeq ($(PLATFORM_RISCV_XLEN), 32)
-+# FW_JUMP_ADDR=0x80400000
-+# else
-+# FW_JUMP_ADDR=0x80200000
-+# endif
-+# FW_JUMP_FDT_ADDR=0x82200000
-+
-+#
-+# Firmware with payload configuration.
-+# Optional parameters are commented out. Uncomment and define these parameters
-+# as needed.
-+#
 +FW_PAYLOAD=y
-+# This needs to be 4MB aligned for 32-bit support
-+# This needs to be 2MB aligned for 64-bit support
-+ifeq ($(PLATFORM_RISCV_XLEN), 32)
-+FW_PAYLOAD_OFFSET=0x400000
-+else
++
 +FW_PAYLOAD_OFFSET=0x200000
-+endif
 +FW_PAYLOAD_ALIGN=0x1000
-+# FW_PAYLOAD_PATH="path to next boot stage binary image file"
-+# FW_PAYLOAD_FDT_ADDR=0x82200000
 diff --git a/platform/fpga/sargantana_alveo/platform.c b/platform/fpga/sargantana_alveo/platform.c
 new file mode 100644
 index 0000000..a359b34
 --- /dev/null
 +++ b/platform/fpga/sargantana_alveo/platform.c
-@@ -0,0 +1,146 @@
-+/*
-+ * SPDX-License-Identifier: BSD-2-Clause
-+ *
-+ * Copyright (c) 2019 Western Digital Corporation or its affiliates.
-+ */
-+
+@@ -0,0 +1,104 @@
 +#include <sbi/riscv_asm.h>
 +#include <sbi/riscv_encoding.h>
 +#include <sbi/sbi_const.h>
 +#include <sbi/sbi_platform.h>
-+
-+/*
-+ * Include these files as needed.
-+ * See objects.mk SARGANTANA_ALVEO_xxx configuration parameters.
-+ */
-+
-+#include <sbi_utils/serial/alveo_uart.h>
++#include <sbi_utils/serial/uart8250.h>
 +#include <sbi/sbi_timer.h>
 +
 +#define SARGANTANA_ALVEO_HART_COUNT		1
 +
 +#define SARGANTANA_ALVEO_UART_BASE_ADDR	0x40000000
 +#define SARGANTANA_ALVEO_UART_OFFSET		0x1000
-+//#define SARGANTANA_ALVEO_UART_ADDR			SARGANTANA_ALVEO_UART_BASE_ADDR + SARGANTANA_ALVEO_UART_XLNX_OFFSET
 +#define SARGANTANA_ALVEO_UART_INPUT_FREQ	50000000
 +#define SARGANTANA_ALVEO_UART_BAUDRATE		115200
 +
 +#define SARGANTANA_ALVEO_TIMER_BASE		0x40170000
-+#define ADDR_TIME_L 					0x0u // 32 lower bits of the time register
-+#define ADDR_TIME_H 					0x1u // 32 higher bits of the time register
++#define ADDR_TIME_L 						0x0u // 32 lower bits of the time register
++#define ADDR_TIME_H 						0x1u // 32 higher bits of the time register
 +#define ADDR_TIMECMP_L 					0x2u // 32 lower bits of the time comparator
 +#define ADDR_TIMECMP_H 					0x3u // 32 higher bits of the time comparator
 +
 +volatile uint32_t *timer_base_ptr = (uint32_t *)(SARGANTANA_ALVEO_TIMER_BASE);
 +
-+/*
-+ * Platform early initialization.
-+ */
-+static int sargantana_alveo_early_init(bool cold_boot)
++static int sargantana_alveo_early_init(bool cold_boot) // Platform early initialization.
 +{
 +	return 0;
 +}
 +
-+/*
-+ * Platform final initialization.
-+ */
-+static int sargantana_alveo_final_init(bool cold_boot)
++static int sargantana_alveo_final_init(bool cold_boot) // Platform final initialization.
 +{
 +	return 0;
 +}
 +
-+/*
-+ * Initialize the platform console.
-+ */
-+static int sargantana_alveo_console_init(void)
++static int sargantana_alveo_console_init(void) // Initialize the platform console.
 +{
-+	return alveo_uart_init(SARGANTANA_ALVEO_UART_BASE_ADDR,
++	return uart8250_init(SARGANTANA_ALVEO_UART_BASE_ADDR,
 +						SARGANTANA_ALVEO_UART_INPUT_FREQ,
 +			     		SARGANTANA_ALVEO_UART_BAUDRATE,
 +						2, 4,
 +						SARGANTANA_ALVEO_UART_OFFSET);
 +}
 +
-+/*
-+ * Initialize the platform interrupt controller for current HART.
-+ */
-+static int sargantana_alveo_irqchip_init(bool cold_boot)
++static int sargantana_alveo_irqchip_init(bool cold_boot) // Initialize the platform interrupt controller for current HART.
 +{
 +	u32 hartid = current_hartid();
 +	return hartid;
 +}
 +
-+/*
-+ * Initialize IPI for current HART.
-+ */
-+static int sargantana_alveo_ipi_init(bool cold_boot)
++static int sargantana_alveo_ipi_init(bool cold_boot) // Initialize IPI for current HART.
 +{
 +	return 0;
 +}
 +
-+/*
-+ * Get platform timer value.
-+ */
-+static u64 sargantana_alveo_timer_value(void)
++static u64 sargantana_alveo_timer_value(void) // Get platform timer value.
 +{
 +	return ((u64)*(timer_base_ptr + ADDR_TIME_H) << 32) + *(timer_base_ptr + ADDR_TIME_L);
 +}
 +
-+/*
-+ * Start platform timer event for current HART.
-+ */
-+static void sargantana_alveo_timer_event_start(u64 next_event)
++static void sargantana_alveo_timer_event_start(u64 next_event) // Start platform timer event for current HART.
 +{
 +	*(timer_base_ptr + ADDR_TIMECMP_H) = next_event >> 32;
 +    *(timer_base_ptr + ADDR_TIMECMP_L) = next_event;
 +}
 +
-+/*
-+ * Stop platform timer event for current HART.
-+ */
-+static void sargantana_alveo_timer_event_stop(void)
++static void sargantana_alveo_timer_event_stop(void) // Stop platform timer event for current HART.
 +{
 +
 +    *(timer_base_ptr + ADDR_TIMECMP_H) = 0;
@@ -398,17 +113,14 @@ index 0000000..a359b34
 +}
 +
 +static struct sbi_timer_device mtimer = {
-+	.name = "generic_timer", // TODO Where the timer comes from? I would prefer a better name :p
++	.name = "axi_timer",
 +	.timer_freq = SARGANTANA_ALVEO_UART_INPUT_FREQ,
 +	.timer_value = sargantana_alveo_timer_value,
 +	.timer_event_start = sargantana_alveo_timer_event_start,
 +	.timer_event_stop = sargantana_alveo_timer_event_stop
 +};
 +
-+/*
-+ * Initialize platform timer for current HART.
-+ */
-+static int sargantana_alveo_timer_init(bool cold_boot)
++static int sargantana_alveo_timer_init(bool cold_boot) // Initialize platform timer for current HART.
 +{
 +	*(timer_base_ptr + ADDR_TIMECMP_H) = 0;
 +    *(timer_base_ptr + ADDR_TIMECMP_L) = 0;
@@ -416,10 +128,7 @@ index 0000000..a359b34
 +	return 0;
 +}
 +
-+/*
-+ * Platform descriptor.
-+ */
-+const struct sbi_platform_operations sargantana_alveo_ops = {
++const struct sbi_platform_operations sargantana_alveo_ops = { // Platform descriptor.
 +	.early_init		= sargantana_alveo_early_init,
 +	.final_init		= sargantana_alveo_final_init,
 +	.console_init	= sargantana_alveo_console_init,
@@ -427,6 +136,7 @@ index 0000000..a359b34
 +	.ipi_init		= sargantana_alveo_ipi_init,
 +	.timer_init		= sargantana_alveo_timer_init
 +};
++
 +const struct sbi_platform platform = {
 +	.opensbi_version	= OPENSBI_VERSION,
 +	.platform_version	= SBI_PLATFORM_VERSION(0x0, 0x01),
